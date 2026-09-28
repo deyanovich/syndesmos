@@ -2,11 +2,12 @@
 //!
 //! [`convert`] turns one `common/segments/<tag>.xml` into a `.desm`
 //! text (or nothing, when the file tailors no sentence breaks). With
-//! the `fetch` feature, [`fetch`] takes a whole release from the
-//! CLDR repository at its release tag — immutable, so a fetch by
-//! version is reproducible — and [`latest`] asks which release that
-//! is today. The crate's own `cldr/` directory is written by the
-//! same code (`desm cldr get <version> --into cldr/`).
+//! the `fetch` feature, [`fetch`] reads a whole release from the
+//! archive Unicode publishes at `unicode.org/Public/cldr/<version>/`
+//! — a release never changes, so a fetch by version is reproducible
+//! — and [`latest`] asks which release is the newest there. The
+//! crate's own `cldr/` directory is written by the same code
+//! (`desm cldr get <version> --into cldr/`).
 
 /// The `.desm` text for one CLDR segments file, `None` when it
 /// carries no sentence-break suppressions (many tailor only line or
@@ -61,41 +62,94 @@ pub fn version_of_tag(tag: &str) -> Option<String> {
 }
 
 #[cfg(feature = "fetch")]
-fn get(url: &str) -> Result<String, String> {
-    let mut resp = ureq::get(url)
+fn agent() -> ureq::Agent {
+    ureq::Agent::new_with_defaults()
+}
+
+#[cfg(feature = "fetch")]
+fn get_text(url: &str) -> Result<String, String> {
+    agent()
+        .get(url)
         .header(
             "User-Agent",
             concat!("syndesmos/", env!("CARGO_PKG_VERSION")),
         )
         .call()
-        .map_err(|e| format!("{url}: {e}"))?;
-    resp.body_mut()
+        .map_err(|e| format!("{url}: {e}"))?
+        .body_mut()
         .read_to_string()
         .map_err(|e| format!("{url}: {e}"))
 }
 
-/// The latest CLDR release's version (`"48.2"`), from the
-/// repository's tags.
+#[cfg(feature = "fetch")]
+fn get_bytes(url: &str) -> Result<Vec<u8>, String> {
+    agent()
+        .get(url)
+        .header(
+            "User-Agent",
+            concat!("syndesmos/", env!("CARGO_PKG_VERSION")),
+        )
+        .call()
+        .map_err(|e| format!("{url}: {e}"))?
+        .body_mut()
+        .with_config()
+        .limit(256 * 1024 * 1024)
+        .read_to_vec()
+        .map_err(|e| format!("{url}: {e}"))
+}
+
+/// Where Unicode publishes the releases.
+const PUBLIC: &str = "https://unicode.org/Public/cldr";
+
+/// The URL of a release's `cldr-common-<version>.zip`, the archive
+/// that holds `common/segments/`.
+pub fn archive_url(version: &str) -> String {
+    format!("{PUBLIC}/{version}/cldr-common-{version}.zip")
+}
+
+/// The version directories an index page of `unicode.org/Public/cldr/`
+/// lists, highest first (`48.2` above `48`).
+pub fn versions_in_index(html: &str) -> Vec<String> {
+    let dir = regex::Regex::new(r#"href="([0-9]+(?:\.[0-9]+)*)/""#).expect("static regex");
+    let mut out: Vec<String> = dir.captures_iter(html).map(|c| c[1].to_string()).collect();
+    out.sort_by_key(|v| std::cmp::Reverse(version_key(v)));
+    out.dedup();
+    out
+}
+
+fn version_key(v: &str) -> Vec<u32> {
+    v.split('.').map(|p| p.parse().unwrap_or(0)).collect()
+}
+
+/// The latest CLDR release's version (`"48.2"`): the highest
+/// version directory on unicode.org that holds a release archive.
+/// A directory prepared for a coming release has none yet and is
+/// passed over.
 #[cfg(feature = "fetch")]
 pub fn latest() -> Result<String, String> {
-    let json = get("https://api.github.com/repos/unicode-org/cldr/tags?per_page=100")?;
-    let name = regex::Regex::new(r#""name"\s*:\s*"(release-[0-9-]+)""#).expect("static regex");
-    let mut best: Option<(Vec<u32>, String)> = None;
-    for c in name.captures_iter(&json) {
-        if let Some(v) = version_of_tag(&c[1]) {
-            let key: Vec<u32> = v.split('.').map(|p| p.parse().unwrap_or(0)).collect();
-            if best.as_ref().is_none_or(|(k, _)| key > *k) {
-                best = Some((key, v));
-            }
+    let index = get_text(&format!("{PUBLIC}/"))?;
+    for v in versions_in_index(&index) {
+        let ok = agent()
+            .head(&archive_url(&v))
+            .header(
+                "User-Agent",
+                concat!("syndesmos/", env!("CARGO_PKG_VERSION")),
+            )
+            .call()
+            .map(|r| r.status().is_success())
+            .unwrap_or(false);
+        if ok {
+            return Ok(v);
         }
     }
-    best.map(|(_, v)| v)
-        .ok_or_else(|| "no release tag found in the CLDR repository's tags".to_string())
+    Err(format!("no release archive found under {PUBLIC}/"))
 }
 
 /// Every language of a CLDR release that carries sentence-break
-/// suppressions, as `(tag, .desm text)`; `version` is `"48.2"`-shaped
-/// or `"latest"`.
+/// suppressions, as `(tag, .desm text)`, read from the release
+/// archive on unicode.org; `version` is `"48.2"`-shaped or
+/// `"latest"`. The archive is a few tens of megabytes: a fetch is a
+/// maintenance step, not a build step.
 #[cfg(feature = "fetch")]
 pub fn fetch(version: &str) -> Result<(String, Vec<(String, String)>), String> {
     let version = if version == "latest" {
@@ -103,24 +157,30 @@ pub fn fetch(version: &str) -> Result<(String, Vec<(String, String)>), String> {
     } else {
         version.to_string()
     };
-    let tag = format!("release-{}", version.replace('.', "-"));
-    let listing = get(&format!(
-        "https://api.github.com/repos/unicode-org/cldr/contents/common/segments?ref={tag}"
-    ))?;
-    let name = regex::Regex::new(r#""name"\s*:\s*"([A-Za-z_]+)\.xml""#).expect("static regex");
+    let url = archive_url(&version);
+    let bytes = get_bytes(&url)?;
+    let mut zip =
+        zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| format!("{url}: {e}"))?;
     let mut out = Vec::new();
-    for c in name.captures_iter(&listing) {
-        let lang = &c[1];
-        let xml = get(&format!(
-            "https://raw.githubusercontent.com/unicode-org/cldr/{tag}/common/segments/{lang}.xml"
-        ))?;
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).map_err(|e| format!("{url}: {e}"))?;
+        let name = entry.name().to_string();
+        let Some(file) = name.strip_prefix("common/segments/") else {
+            continue;
+        };
+        let Some(lang) = file.strip_suffix(".xml") else {
+            continue;
+        };
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut entry, &mut xml)
+            .map_err(|e| format!("{url}: {name}: {e}"))?;
         if let Some(text) = convert(&xml, lang, &version) {
             out.push((lang.to_string(), text));
         }
     }
     if out.is_empty() {
         return Err(format!(
-            "CLDR {version}: no sentence-break suppressions found (is the release tag right?)"
+            "CLDR {version}: no sentence-break suppressions in {url}"
         ));
     }
     out.sort();
@@ -155,5 +215,11 @@ mod tests {
         assert_eq!(version_of_tag("release-48-2").as_deref(), Some("48.2"));
         assert_eq!(version_of_tag("release-47").as_deref(), Some("47"));
         assert!(version_of_tag("release-48-alpha1").is_none());
+        let index = r#"<a href="47/">47/</a> <a href="48/">48/</a> <a href="48.2/">48.2/</a> <a href="49/">49/</a> <a href="48.1/">48.1/</a> <a href="?C=N;O=D">Name</a>"#;
+        assert_eq!(versions_in_index(index), ["49", "48.2", "48.1", "48", "47"]);
+        assert_eq!(
+            archive_url("48.2"),
+            "https://unicode.org/Public/cldr/48.2/cldr-common-48.2.zip"
+        );
     }
 }

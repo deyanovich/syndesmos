@@ -117,10 +117,13 @@ desm cldr get 47 --into vendor/  # any release, any directory
 desm cldr get latest --into cldr/
 ```
 
-`get` fetches the release's segment files at its git tag, which is
-immutable, so a fetch by version is reproducible; `latest` asks the
-repository what the newest release is, which is a maintenance
-question, so a build step names a version.
+`get` reads the release archive Unicode publishes
+(`unicode.org/Public/cldr/<version>/cldr-common-<version>.zip`,
+a few tens of megabytes), which never changes once released, so a
+fetch by version is reproducible; `latest` takes the highest
+version directory there that holds an archive (a directory
+prepared for a coming release is passed over). That is a
+maintenance question, so a build step names a version.
 
 ## The `desm` binary
 

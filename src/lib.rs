@@ -371,11 +371,25 @@ impl Syndesmos {
         let rel = at - lo;
         for idx in set.matches(window) {
             let (_, re) = &self.patterns[idx];
-            if re
-                .find_iter(window)
-                .any(|m| m.start() < rel && m.end() >= rel)
-            {
-                return true;
+            // Matches may overlap: `/[A-Z]\. [A-Z]/` must straddle
+            // both breaks of `J. R. Tolkien`, and the second match
+            // begins inside the first. So the search restarts one
+            // character after each match's start, not at its end.
+            let mut pos = 0;
+            while let Some(m) = re.find_at(window, pos) {
+                if m.start() >= rel {
+                    break;
+                }
+                if m.end() >= rel {
+                    return true;
+                }
+                pos = m.start() + 1;
+                while pos < window.len() && !window.is_char_boundary(pos) {
+                    pos += 1;
+                }
+                if pos > window.len() {
+                    break;
+                }
             }
         }
         false
@@ -612,6 +626,26 @@ mod tests {
         assert!(!s.bonds(t, at("J. R.")));
         assert!(!s.bonds(t, at("Then")), "Undr. is not Dr.");
         assert!(!s.bonds(t, 0));
+    }
+
+    #[test]
+    fn overlapping_matches_straddle_every_break() {
+        // `J. R` and `R. R` overlap; a non-overlapping scan finds
+        // only the first and misses the second break.
+        let s = Syndesmos::parse("/[A-Z]\\. [A-Z]/\n").unwrap();
+        let t = "J. R. R. Tolkien wrote. So did others.";
+        let at = |w: &str| t.find(w).unwrap();
+        assert!(s.bonds(t, at("R. R.")));
+        assert!(s.bonds(t, at("R. Tolkien")));
+        assert!(s.bonds(t, at("Tolkien")));
+        assert!(!s.bonds(t, at("So did")));
+        assert_eq!(
+            s.apply(
+                t,
+                &[at("R. R."), at("R. Tolkien"), at("Tolkien"), at("So did")]
+            ),
+            [at("So did")]
+        );
     }
 
     #[cfg(feature = "uax29")]

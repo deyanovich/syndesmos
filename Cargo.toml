@@ -1,6 +1,6 @@
 [package]
 name = "syndesmos"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 description = "Sentence bonds over UAX #29: the .desm rule file and the overlay that applies it — which segments bond into one sentence"
 license = "MIT OR Apache-2.0"

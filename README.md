@@ -11,19 +11,15 @@ atoms. The name is Greek σύνδεσμος, "a binding together": the
 chemical bond, the grammarians' word for what joins clauses, and
 the joint that holds two bones together without fusing them.
 
-Shared by [quarb](https://quarb.org) (the corpus reading and the
-`sentences` function), literium (a display layer over its
-sentence atoms) and atrep.
-
 ## The `.desm` file
 
 One rule per line; `#` comments and blank lines are ignored.
 
 ```
 # twain.desm — bonds for a Twain corpus
-use en                 # the built-in English list (CLDR)
-Injun                  # no: a bare line is an abbreviation…
-Mr.                    # …a whole word a sentence may end in
+#!cldr en 48.2         # Unicode CLDR's English suppressions, that release
+#!include house.desm   # another .desm beside this one
+Mr.                    # a bare line is an abbreviation…
 /[A-Z]\. [A-Z]/        # initials: J. R. R. Tolkien
 /No\. \d/              # No. 7
 /[?!]” [a-z]/          # “Why?” he asked
@@ -36,7 +32,7 @@ Mr.                    # …a whole word a sentence may end in
   precedes the word must be the start, a space or another
   non-letter, so `Undr.` is not `Dr.`. A comment may follow after
   two spaces. This is CLDR's sentence-break suppression, one to
-  one, so the language seeds convert without interpretation.
+  one, so CLDR's lists convert without interpretation.
 - A **`/regex/` line** undoes a break that a match *straddles*:
   the match begins before the boundary and reaches it. UAX #29
   places the boundary at the start of the next segment, after the
@@ -44,8 +40,18 @@ Mr.                    # …a whole word a sentence may end in
   left-only condition ends in the space (`/etc\. /`); a right-only
   one starts with it (`/ [a-z]/`). `\/` escapes a slash; a trailing
   `i` folds case; nothing else may follow but a comment.
-- **`use LANG`** pulls in the crate's built-in file for a language,
-  so a project file is its additions only.
+- **`#!cldr TAG [VERSION]`** merges Unicode CLDR's sentence-break
+  suppressions for a language. With no version, or the version this
+  crate ships (`syndesmos::CLDR_VERSION`), the shipped list is used;
+  another version is read from the cache that `desm cldr get
+  VERSION` fills, and refused with that command named when absent —
+  a written version is a pin, never a silent substitution.
+- **`#!include PATH`** merges another `.desm`, resolved against the
+  including file's directory. Includes nest; a cycle is an error.
+
+Directives begin with `#!`, so they are comments to any reader that
+knows none, and a bond line never begins with `#`: the two cannot
+collide whatever punctuation a path carries.
 
 Rules only ever *undo* breaks; nothing in a `.desm` adds one. A
 text whose sentences lack terminators needs a segmenter decision
@@ -79,8 +85,7 @@ implementation can follow it from this page.
 ```rust
 use syndesmos::Syndesmos;
 
-let mut bonds = Syndesmos::language("en").unwrap();
-bonds.extend(Syndesmos::load("twain.desm")?);
+let bonds = Syndesmos::load("twain.desm")?;   // #!cldr and #!include resolved
 
 // The overlay: boundaries in, boundaries out.
 let kept = bonds.apply(text, &boundaries);
@@ -91,29 +96,52 @@ for (at, sentence) in bonds.split_sentence_bound_indices(text) { … }
 for sentence in bonds.unicode_sentences(text) { … }
 ```
 
-The built-in language files (`desm/*.desm`) are seeded from CLDR's
-sentence-break suppressions: `de`, `en`, `es`, `fr`, `it`, `pt`,
-`ru`. `Syndesmos::languages()` lists them.
+## The CLDR lists
+
+`cldr/*.desm` are Unicode CLDR's sentence-break suppressions,
+verbatim, one file per language that has them: `de`, `en`, `es`,
+`fr`, `it`, `pt`, `ru`. They come from a named release — **48.2**
+(`release-48-2`, `common/segments/<tag>.xml`,
+`<suppressions type="standard">`) — which every file's header
+states and `syndesmos::CLDR_VERSION` states in code. The crate
+never edits them: they are written by its own converter, and a
+new release is `desm cldr get <version> --into cldr/`.
+
+`Syndesmos::cldr("en")` reads a shipped list in code (for a
+consumer with no filesystem, such as a browser build);
+`Syndesmos::cldr_languages()` lists the tags.
+
+```
+desm cldr get 48.2               # into the cache, for #!cldr en 48.2
+desm cldr get 47 --into vendor/  # any release, any directory
+desm cldr get latest --into cldr/
+```
+
+`get` fetches the release's segment files at its git tag, which is
+immutable, so a fetch by version is reproducible; `latest` asks the
+repository what the newest release is, which is a maintenance
+question, so a build step names a version.
 
 ## The `desm` binary
 
 ```
 desm check twain.desm            # parse, report the first error
-desm show --lang en twain.desm   # the effective bonds
-desm segment --lang en < book.txt          # one sentence per line
-desm segment --lang en --offsets < book.txt
+desm show twain.desm             # the effective bonds, directives resolved
+desm segment twain.desm < book.txt           # one sentence per line
+desm segment --cldr en --offsets < book.txt  # a shipped CLDR list alone
 ```
 
 ## Features
 
 - `uax29` (default): the drop-in over unicode-segmentation.
-- `cli` (default): the `desm` binary.
+- `fetch`: `cldr::fetch` and `cldr::latest` (an HTTP client).
+- `cli` (default): the `desm` binary; implies both.
 
-With both off the crate is the overlay alone, `regex` its only
-dependency.
+With all off the crate is the overlay and the converter alone,
+`regex` its only dependency.
 
 ## License
 
-MIT or Apache-2.0, at your option. The seed lists under `desm/`
-derive from Unicode CLDR data, © Unicode, Inc., under the Unicode
-License (`LICENSE-UNICODE`).
+MIT or Apache-2.0, at your option. The lists under `cldr/` are
+Unicode CLDR data (release 48.2), © Unicode, Inc., under the
+Unicode License (`LICENSE-UNICODE`).

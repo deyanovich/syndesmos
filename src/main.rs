@@ -1,5 +1,5 @@
-//! `desm` — check a `.desm` file, show the effective bonds, or
-//! segment text with them.
+//! `desm` — check a `.desm` file, show the effective bonds, segment
+//! text with them, or fetch Unicode CLDR's lists as `.desm` files.
 
 use clap::{Parser, Subcommand};
 use std::io::Read;
@@ -16,29 +16,49 @@ struct Cli {
 enum Cmd {
     /// Parse the files and report the first error, if any.
     Check { files: Vec<std::path::PathBuf> },
-    /// Print the effective bonds of a language and/or files.
+    /// Print the effective bonds of files and/or a shipped CLDR list.
     Show {
-        #[arg(long)]
-        lang: Option<String>,
+        /// A shipped CLDR suppression list by language tag.
+        #[arg(long, value_name = "TAG")]
+        cldr: Option<String>,
         files: Vec<std::path::PathBuf>,
     },
     /// Segment standard input into sentences, one per line.
     Segment {
-        #[arg(long)]
-        lang: Option<String>,
+        /// A shipped CLDR suppression list by language tag.
+        #[arg(long, value_name = "TAG")]
+        cldr: Option<String>,
         /// Print `offset\tsentence` instead of the sentence alone.
         #[arg(long)]
         offsets: bool,
         files: Vec<std::path::PathBuf>,
     },
+    /// Unicode CLDR's sentence-break suppressions as .desm files.
+    #[command(subcommand)]
+    Cldr(CldrCmd),
 }
 
-fn gather(lang: Option<&str>, files: &[std::path::PathBuf]) -> Result<Syndesmos, String> {
-    let mut s = match lang {
-        Some(tag) => Syndesmos::language(tag).ok_or_else(|| {
+#[derive(Subcommand)]
+enum CldrCmd {
+    /// Fetch a CLDR release (`48.2`, or `latest`) and write one
+    /// .desm per language that carries sentence-break suppressions.
+    Get {
+        /// The release, `48.2`-shaped, or `latest`.
+        version: String,
+        /// Where to write; default: the cache `#!cldr TAG VERSION`
+        /// reads ($XDG_CACHE_HOME/syndesmos/cldr/<version>/).
+        #[arg(long, value_name = "DIR")]
+        into: Option<std::path::PathBuf>,
+    },
+}
+
+fn gather(cldr: Option<&str>, files: &[std::path::PathBuf]) -> Result<Syndesmos, String> {
+    let mut s = match cldr {
+        Some(tag) => Syndesmos::cldr(tag).ok_or_else(|| {
             format!(
-                "no built-in language {tag:?} (have: {})",
-                Syndesmos::languages().join(", ")
+                "no CLDR list for {tag:?} (CLDR {}: {})",
+                syndesmos::CLDR_VERSION,
+                Syndesmos::cldr_languages().join(", ")
             )
         })?,
         None => Syndesmos::empty(),
@@ -64,7 +84,7 @@ fn main() {
                 })
                 .map_err(|e| format!("{}: {e}", f.display()))
         }),
-        Cmd::Show { lang, files } => gather(lang.as_deref(), &files).map(|s| {
+        Cmd::Show { cldr, files } => gather(cldr.as_deref(), &files).map(|s| {
             for a in s.abbreviations() {
                 println!("{a}");
             }
@@ -73,10 +93,10 @@ fn main() {
             }
         }),
         Cmd::Segment {
-            lang,
+            cldr,
             offsets,
             files,
-        } => gather(lang.as_deref(), &files).and_then(|s| {
+        } => gather(cldr.as_deref(), &files).and_then(|s| {
             let mut text = String::new();
             std::io::stdin()
                 .read_to_string(&mut text)
@@ -94,6 +114,26 @@ fn main() {
             }
             Ok(())
         }),
+        Cmd::Cldr(CldrCmd::Get { version, into }) => {
+            syndesmos::cldr::fetch(&version).and_then(|(version, files)| {
+                let dir = match into {
+                    Some(d) => d,
+                    None => syndesmos::cldr::cache_dir()
+                        .ok_or_else(|| {
+                            "no cache directory (set HOME or XDG_CACHE_HOME)".to_string()
+                        })?
+                        .join(&version),
+                };
+                std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+                for (tag, text) in &files {
+                    let path = dir.join(format!("{tag}.desm"));
+                    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+                    println!("{}", path.display());
+                }
+                eprintln!("CLDR {version}: {} languages", files.len());
+                Ok(())
+            })
+        }
     };
     if let Err(e) = result {
         eprintln!("desm: {e}");

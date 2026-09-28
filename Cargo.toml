@@ -1,6 +1,6 @@
 [package]
 name = "syndesmos"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Sentence bonds over UAX #29: the .desm rule file and the overlay that applies it — which segments bond into one sentence"
 license = "MIT OR Apache-2.0"
@@ -9,19 +9,22 @@ repository = "https://gitlab.com/syndesmos/syndesmos"
 readme = "README.md"
 keywords = ["sentence", "segmentation", "uax29", "unicode", "corpus"]
 categories = ["text-processing", "internationalization"]
-include = ["src/**", "desm/*.desm", "README.md", "LICENSE-*", "Cargo.toml"]
+include = ["src/**", "cldr/*.desm", "README.md", "LICENSE-*", "Cargo.toml"]
 
 [features]
 default = ["uax29", "cli"]
 # The drop-in: unicode-segmentation's sentence API with the bonds applied.
 uax29 = ["dep:unicode-segmentation"]
+# `desm cldr get`: fetch a CLDR release and write its lists as .desm files.
+fetch = ["dep:ureq"]
 # The `desm` binary.
-cli = ["dep:clap", "uax29"]
+cli = ["dep:clap", "uax29", "fetch"]
 
 [dependencies]
 regex = "1"
 unicode-segmentation = { version = "1", optional = true }
 clap = { version = "4", features = ["derive"], optional = true }
+ureq = { version = "3", optional = true }
 
 [[bin]]
 name = "desm"

@@ -33,6 +33,12 @@ enum Cmd {
         offsets: bool,
         files: Vec<std::path::PathBuf>,
     },
+    /// Print a file's canonical form: the top comment, #!cldr pins
+    /// made explicit, abbreviations sorted, patterns sorted, includes
+    /// inlined, other comments dropped.
+    Canon { file: std::path::PathBuf },
+    /// The SHA-256 of the canonical form: a file's identity.
+    Hash { files: Vec<std::path::PathBuf> },
     /// Unicode CLDR's sentence-break suppressions as .desm files.
     #[command(subcommand)]
     Cldr(CldrCmd),
@@ -50,6 +56,12 @@ enum CldrCmd {
         #[arg(long, value_name = "DIR")]
         into: Option<std::path::PathBuf>,
     },
+}
+
+fn canon_of(file: &std::path::Path) -> Result<String, String> {
+    let text = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let canon = std::fs::canonicalize(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    syndesmos::canon(&text, canon.parent()).map_err(|e| format!("{}: {e}", file.display()))
 }
 
 fn gather(cldr: Option<&str>, files: &[std::path::PathBuf]) -> Result<Syndesmos, String> {
@@ -113,6 +125,21 @@ fn main() {
                 }
             }
             Ok(())
+        }),
+        Cmd::Canon { file } => canon_of(&file).map(|c| print!("{c}")),
+        Cmd::Hash { files } => files.iter().try_for_each(|f| {
+            use sha2::Digest;
+            canon_of(f).map(|c| {
+                let hex: String = sha2::Sha256::digest(c.as_bytes())
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                if files.len() > 1 {
+                    println!("{hex}  {}", f.display());
+                } else {
+                    println!("{hex}");
+                }
+            })
         }),
         Cmd::Cldr(CldrCmd::Get { version, into }) => {
             syndesmos::cldr::fetch(&version).and_then(|(version, files)| {

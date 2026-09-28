@@ -132,7 +132,24 @@ desm check twain.desm            # parse, report the first error
 desm show twain.desm             # the effective bonds, directives resolved
 desm segment twain.desm < book.txt           # one sentence per line
 desm segment --cldr en --offsets < book.txt  # a shipped CLDR list alone
+desm canon twain.desm > twain.canon.desm     # the canonical form
+desm hash twain.desm             # sha256 of the canonical form
 ```
+
+### The canonical form
+
+`desm canon` prints a file in one fixed shape, so two files that
+mean the same thing print the same bytes: the leading comment
+block verbatim; then the file's `#!cldr` lines, sorted by tag, each
+with its release written out (an unpinned `#!cldr en` becomes
+`#!cldr en 48.2`, the pin it meant); then the abbreviations, sorted
+case-insensitively; then the patterns, sorted by their text; all
+deduplicated, `#!include` files inlined as rules, and every other
+comment dropped. The result is self-contained except for the CLDR
+references, which are versioned by design. `desm hash` is the
+SHA-256 of that text: the identity of a bond set, covering every
+local rule and the exact CLDR release, for anything that needs to
+say "segmented under these bonds".
 
 ## Features
 

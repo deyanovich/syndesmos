@@ -393,6 +393,88 @@ impl Syndesmos {
     }
 }
 
+/// The canonical form of a `.desm` text (`desm canon`): the leading
+/// comment block verbatim, then the file's `#!cldr` lines with their
+/// release made explicit (sorted by tag), then the abbreviations
+/// (sorted, case-insensitively then exactly), then the patterns
+/// (sorted by source), all deduplicated. `#!include` files are
+/// inlined as rules, so the result is self-contained except for the
+/// CLDR references, which are versioned by design; comments between
+/// and after rules are dropped. `base` resolves includes, as for
+/// [`Syndesmos::load`]. `desm hash` is the SHA-256 of this text.
+pub fn canon(text: &str, base: Option<&std::path::Path>) -> Result<String, ParseError> {
+    let mut head = String::new();
+    let mut in_head = true;
+    let mut cldr: Vec<(String, String)> = Vec::new();
+    let mut rules = Syndesmos::empty();
+    let mut stack = Vec::new();
+    for (i, raw) in text.lines().enumerate() {
+        let line = i + 1;
+        let l = raw.trim();
+        let is_comment = l.starts_with('#') && !l.starts_with("#!");
+        if in_head && (l.is_empty() || is_comment) {
+            if !(l.is_empty() && head.is_empty()) {
+                head.push_str(raw.trim_end());
+                head.push('\n');
+            }
+            continue;
+        }
+        in_head = false;
+        if l.is_empty() || is_comment {
+            continue;
+        }
+        if let Some(args) = l.strip_prefix("#!cldr ") {
+            let mut it = args.split_whitespace();
+            let tag = it.next().unwrap_or("").to_string();
+            let version = it.next().map(str::to_string);
+            if tag.is_empty() || it.next().is_some() {
+                return Err(ParseError {
+                    line,
+                    message: "#!cldr takes a language tag and an optional release: #!cldr en 48.2"
+                        .into(),
+                });
+            }
+            // Resolve, so an unknown tag or an unsatisfiable pin is an
+            // error here too; then keep the line as a pin.
+            Syndesmos::cldr_at(&tag, version.as_deref())
+                .map_err(|message| ParseError { line, message })?;
+            cldr.push((tag, version.unwrap_or_else(|| CLDR_VERSION.to_string())));
+            continue;
+        }
+        // Everything else parses as one line of a file (includes
+        // inlined through the ordinary loader).
+        let one = Syndesmos::parse_in(l, base, &mut stack).map_err(|e| ParseError {
+            line,
+            message: e.message,
+        })?;
+        rules.extend(one);
+    }
+    cldr.sort();
+    cldr.dedup();
+    let mut out = head.trim_end().to_string();
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    for (tag, v) in &cldr {
+        out.push_str(&format!("#!cldr {tag} {v}\n"));
+    }
+    let mut abbreviations = rules.abbreviations().to_vec();
+    abbreviations.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()).then(a.cmp(b)));
+    abbreviations.dedup();
+    for a in &abbreviations {
+        out.push_str(a);
+        out.push('\n');
+    }
+    let mut patterns: Vec<&str> = rules.patterns().collect();
+    patterns.sort();
+    patterns.dedup();
+    for p in patterns {
+        out.push_str(p);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
 /// Split `rest` (after the opening slash) at the closing unescaped
 /// slash: the pattern with `\/` unescaped, and what follows.
 fn split_pattern(rest: &str) -> Option<(String, &str)> {
@@ -466,6 +548,28 @@ mod tests {
             "no base to resolve against"
         );
         assert!(Syndesmos::parse("#!frobnicate").is_err());
+    }
+
+    #[test]
+    fn canon_is_stable_and_explicit() {
+        let dir = std::env::temp_dir().join(format!("syndesmos-canon-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("house.desm"), "# house\nSt.\n/x [a-z]/\n").unwrap();
+        let a = "# top comment\n# second line\n\n#!cldr en\nMrs.  # honorific\n# between\nDr.\n#!include house.desm\n/b [a-z]/i\nDr.\n/a [a-z]/\n";
+        let c = canon(a, Some(&dir)).unwrap();
+        assert_eq!(
+            c,
+            format!(
+                "# top comment\n# second line\n#!cldr en {CLDR_VERSION}\nDr.\nMrs.\nSt.\n/a [a-z]/\n/b [a-z]/i\n/x [a-z]/\n"
+            )
+        );
+        // Order and comments do not change the canonical form.
+        let b = "# top comment\n# second line\n/a [a-z]/\n#!include house.desm\nDr.\n#!cldr en 48.2\n/b [a-z]/i\nMrs.\n";
+        assert_eq!(canon(b, Some(&dir)).unwrap(), c);
+        // No head comment, no directives: rules only.
+        assert_eq!(canon("Z.\nA.\n", None).unwrap(), "A.\nZ.\n");
+        assert!(canon("#!cldr en 1.0\n", None).is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

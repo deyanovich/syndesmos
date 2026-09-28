@@ -1,0 +1,57 @@
+# it.desm — sentence bonds for Italian
+#
+# One rule per line. A bare line is an abbreviation: a sentence
+# may end in it without ending, so the UAX #29 break after it is
+# undone. A /regex/ line undoes a break that a match straddles.
+# See the syndesmos README for the format.
+#
+# Seeded from CLDR's sentence-break suppressions
+# (common/segments/it.xml, "standard"), Unicode, Inc., under the
+# Unicode License (LICENSE-UNICODE). Additions and corrections
+# below the seed are this file's own.
+
+a.C.
+ag.
+all.
+arch.
+avv.
+c.c.p.
+C.P.
+Cfr.
+D.
+d.C.
+d.p.R.
+DC.
+div.
+dott.
+dr.
+fig.
+Geom.
+Ing.
+int.
+L.
+Liv.
+Ltd.
+mitt.
+Mod.
+N.B.
+N.d.A.
+N.d.E.
+N.d.T.
+O.d.G.
+on.
+p.
+p.i.
+pag.
+rag.
+S.A.R.
+S.M.A.R.T.
+S.p.A.
+sez.
+Sig.
+tab.
+tav.
+U.S.
+U.S.A.
+ver.
+vol.
